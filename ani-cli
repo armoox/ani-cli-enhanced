@@ -129,7 +129,7 @@ version_info() {
 
 update_script() {
     info "[branch:$branch] Checking for Update.."
-    update="$(curl --fail-with-body -sL -A "$agent" "https://raw.githubusercontent.com/armoox/ani-cli-fork/$branch/ani-cli")" || die "[branch:$branch] Connection error: $update"
+    update="$(curl --fail-with-body -sL -A "$agent" "https://raw.githubusercontent.com/armoox/ani-cli-enhanced/$branch/ani-cli")" || die "[branch:$branch] Connection error: $update"
     new_version="$(printf "%s" "$update" | sed -nE 's|^version_number="([^"]+)"$|\1|p')"
     [ -z "$new_version" ] && die "[branch:$branch] Invalid response."
     printf "%s" "$update" | grep -q "^version_number" || die "[branch:$branch] Invalid Response."
@@ -1135,4 +1135,4 @@ cleanup
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 #
-# Project repository: https://github.com/armoox/ani-cli-fork
+# Project repository: https://github.com/armoox/ani-cli-enhanced

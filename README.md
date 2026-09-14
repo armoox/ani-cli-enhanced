@@ -3,10 +3,10 @@
   <p><strong>Watch anime from your terminal.</strong></p>
 
   <p>
-    <a href="https://github.com/armoox/ani-cli-fork/wiki/Installation">Install</a> •
-    <a href="https://github.com/armoox/ani-cli-fork/wiki/Usage">Usage</a> •
-    <a href="https://github.com/armoox/ani-cli-fork/wiki/FAQ">FAQ</a> •
-    <a href="https://github.com/armoox/ani-cli-fork/wiki">Wiki</a>
+    <a href="https://github.com/armoox/ani-cli-enhanced/wiki/Installation">Install</a> •
+    <a href="https://github.com/armoox/ani-cli-enhanced/wiki/Usage">Usage</a> •
+    <a href="https://github.com/armoox/ani-cli-enhanced/wiki/FAQ">FAQ</a> •
+    <a href="https://github.com/armoox/ani-cli-enhanced/wiki">Wiki</a>
   </p>
 
   <p>
@@ -36,8 +36,8 @@ curl -sL https://raw.githubusercontent.com/armoox/ani-cli-enhanced/master/instal
 
 | Topic | Link |
 |-------|------|
-| 📦 Installation | [Installation guide](https://github.com/armoox/ani-cli-fork/wiki/Installation) |
-| 🎮 Usage & flags | [Usage guide](https://github.com/armoox/ani-cli-fork/wiki/Usage) |
-| ❓ Questions | [FAQ](https://github.com/armoox/ani-cli-fork/wiki/FAQ) |
-| 🗑️ Uninstall | [Uninstallation](https://github.com/armoox/ani-cli-fork/wiki/Uninstallation) |
-| 🔄 Update | [Update & Patch](https://github.com/armoox/ani-cli-fork/wiki/Update-and-Patch) |
+| 📦 Installation | [Installation guide](https://github.com/armoox/ani-cli-enhanced/wiki/Installation) |
+| 🎮 Usage & flags | [Usage guide](https://github.com/armoox/ani-cli-enhanced/wiki/Usage) |
+| ❓ Questions | [FAQ](https://github.com/armoox/ani-cli-enhanced/wiki/FAQ) |
+| 🗑️ Uninstall | [Uninstallation](https://github.com/armoox/ani-cli-enhanced/wiki/Uninstallation) |
+| 🔄 Update | [Update & Patch](https://github.com/armoox/ani-cli-enhanced/wiki/Update-and-Patch) |

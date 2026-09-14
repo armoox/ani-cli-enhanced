@@ -82,6 +82,9 @@ Exit the player, and return the player exit code (useful for non interactive sce
 \fB\--cache-size\fR
 mpv buffer window kept for seeking in both directions, as a bytesize (eg. 1GiB). Default is 1GiB, or whatever \fBANI_CLI_CACHE\fR is set to. A small window evicts already-played data, so backward seeking silently stops working near the start of the episode.
 .TP
+\fB\--disk-cache\fR, \fB\--no-disk-cache\fR
+Spill the mpv stream cache to a temporary file instead of RAM, so long episodes and movies stay seekable in both directions regardless of the ram window. Enabled by default; disable with \fB\--no-disk-cache\fR or \fBANI_CLI_DISK_CACHE=0\fR.
+.TP
 \fB\--batch\fR
 Download all episodes of found anime (with progress).
 .TP
@@ -104,6 +107,9 @@ Controls how many episodes are downloaded concurrently with --batch. Equivalent 
 .TP
 \fBANI_CLI_CACHE\fR
 mpv buffer window kept for seeking, applied symmetrically so you can seek both forward and backward. Bytesize (eg. 512MiB, 2GiB). Default is 1GiB. Note that a value of 0 disables the back buffer entirely (forward seek range starts after the current position); prefer a size instead.
+.TP
+\fBANI_CLI_DISK_CACHE\fR
+Controls whether the mpv stream cache is spilled to a temporary file so long episodes stay seekable backward. Can be 0 (RAM only) or 1 (on disk). Default is 1, equivalent to \fB\--disk-cache\fR.
 .TP
 \fBANI_CLI_AUTO_PLAY\fR
 Controls if episodes play one after another automatically (mpv only). Equivalent to --auto-play. Can be 0 (disabled) or 1 (enabled). Default is 0.

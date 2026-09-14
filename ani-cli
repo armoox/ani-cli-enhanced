@@ -101,6 +101,9 @@ help_info() {
       --cache-size
         mpv buffer window kept for seeking in both directions
         (bytesize like 1GiB, default: \$ANI_CLI_CACHE or 1GiB)
+      --[no-]disk-cache
+        spill the mpv cache to a temp file so long episodes stay seekable
+        backward regardless of the ram window (default: on)
 
       -N, --nextep-countdown
         Display a countdown to the next episode
@@ -387,6 +390,10 @@ get_video_link() {
     # small --demuxer-max-bytes makes backward seeking fail.  keep both limits on
     # the same budget so you can seek forward AND back through the episode.
     bacc_flag="--cache=yes --stream-lavf-o=http_persistent=0 --demuxer-readahead-secs=60 --demuxer-max-bytes=$ani_cache --demuxer-max-back-bytes=$ani_cache"
+    # once the episode is larger than the ram window, the back buffer still gets
+    # evicted; spill the packet data to a temp file instead so the whole stream
+    # stays seekable both ways regardless of length.
+    [ "$disk_cache" = 1 ] && bacc_flag="$bacc_flag --cache-on-disk=yes"
     # should never trigger but just in case
     if printf "%s" "$ep_list" | grep -q "^$ep_no$"; then
         [ -z "$episode" ] && die "Episode is released, but no valid sources!"
@@ -856,6 +863,7 @@ skip_intro="${ANI_CLI_SKIP_INTRO:-0}"
 auto_play="${ANI_CLI_AUTO_PLAY:-0}"
 parallel="${ANI_CLI_PARALLEL:-1}"
 ani_cache="${ANI_CLI_CACHE:-1GiB}"
+disk_cache="${ANI_CLI_DISK_CACHE:-1}"
 page=1
 menu_program="${ANI_CLI_MENU:-fzf}"
 menu_extra_flags="${ANI_CLI_MENU_FLAGS:-}"
@@ -926,6 +934,8 @@ while [ $# -gt 0 ]; do
             ani_cache="$2"
             shift
             ;;
+        --disk-cache) disk_cache=1 ;;
+        --no-disk-cache) disk_cache=0 ;;
         --auto-play) auto_play=1 ;;
         -c | --continue) search=history ;;
         --resume) resume_enabled=1 ;;

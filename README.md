@@ -23,7 +23,7 @@ A fork of [pystardust/ani-cli](https://github.com/pystardust/ani-cli) — built 
 
 - **Rich search** — results show type & duration, with page-through menus (`-P/--page` or the "load more" entry)
 - **Download manager** — per-anime folders (`$DOWNLOAD_DIR/One Piece/Episode 1.mp4`) and parallel `--batch` downloads (`--parallel N` / `ANI_CLI_PARALLEL`)
-- **Skip intro & outro** — bundled mpv integration queries [aniskip.com](https://aniskip.com) via the MyAnimeList id (no `ani-skip` binary needed; `--skip` / `ANI_CLI_SKIP_INTRO`)
+- **Skip intro & outro** — bundled mpv integration queries via the MyAnimeList id (no `ani-skip` binary needed; `--skip` / `ANI_CLI_SKIP_INTRO`)
 - **Auto-play** — keeps playing the next episode when one ends (`--auto-play`); combine with `-c --resume` to pick up a series where you left off
 
 ### Quick start

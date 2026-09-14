@@ -278,7 +278,9 @@ hianime_has_next() {
 }
 
 # pick an anime from enhanced search results (id \t title \t type \t duration).
-# appends a "load more" entry to page within the search when $1 is non-empty.
+# the id is hidden from the menu so the ranking looks clean; the picked
+# display line is mapped back to its row.  appends a "load more" entry to
+# page within the search when $1 is non-empty.
 search_pick() {
     _input=$(cat -)
     [ -z "$_input" ] && return 1
@@ -287,7 +289,7 @@ search_pick() {
     _multi=""
     [ $# -ge 2 ] && _multi="$2"
     _display="$(printf "%s\n" "$_input" | awk -F'\t' '{
-        line = $1 "  " $2
+        line = $2
         if ($3 != "" || $4 != "") {
             line = line " ["
             if ($3 != "") line = line $3
@@ -299,12 +301,28 @@ search_pick() {
     [ -n "$1" ] && _display="$(printf "%s\n%s" "$_display" "load_more_page  ▶ Load more results")"
     _picked="$(printf "%s\n" "$_display" | menu "Select anime: " "$_multi" "$menu_extra_flags")"
     [ -n "$_picked" ] || return 1
-    for _pid in $(printf "%s\n" "$_picked" | awk '{print $1}'); do
-        case "$_pid" in
-            load_more_page) printf "%s\n" "$_pid" ;;
-            *) printf "%s\n" "$_input" | awk -F'\t' -v id="$_pid" '$1==id' ;;
+    while IFS= read -r _line; do
+        case "$_line" in
+            load_more_page*) printf "%s\n" "load_more_page" ;;
+            *)
+                # map the picked display line back to the full result row
+                _sought="$(printf "%s" "$_line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+                printf "%s\n" "$_input" | awk -F'\t' -v want="$_sought" '
+                    {
+                        line = $2
+                        if ($3 != "" || $4 != "") {
+                            line = line " ["
+                            if ($3 != "") line = line $3
+                            if ($4 != "") { if ($3 != "") line = line " | "; line = line $4 }
+                            line = line "]"
+                        }
+                        if (line == want) print
+                    }'
+                ;;
         esac
-    done
+    done <<EOF
+$(printf "%s" "$_picked")
+EOF
 }
 
 # get the episodes list of the selected anime. format is (id \t ep_no)

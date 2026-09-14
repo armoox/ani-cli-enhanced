@@ -50,8 +50,9 @@ Just try searching for a few series and see how the URL changes (most of the tim
 If the site uses a POST request or a more roundabout way, use the debugger to analyze the traffic.
 
 Once you figured out how searching works, you'll have to replicate it in the `hianime_search` function.
-The `curl` in this function is responsible for the search request, and the following `sed` regexes mold the response into many lines of `id\ttitle` format.
-The reason for this is the `nth` function, see it for more details.
+The `curl` in this function is responsible for the search request, and the following `awk` script molds the response into many lines of `id\ttitle\ttype\tduration` format.
+The extra `type` (TV/MOVIE/OVA/Special...) and `duration` fields come from the `fd-infor` spans and let the `search_pick` function render a richer menu; id and title alone are used by the rest of the flow.
+The search is paginated: `hianime_search` takes the page number as its second argument and `hianime_has_next` tells the menu whether a "load more results" entry should be offered.
 
 If you have done everything correctly, you can run `ani-cli`, query your site of choice and select from the responses.
 Then ani-cli should fail without a message.

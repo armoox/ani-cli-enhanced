@@ -52,6 +52,15 @@ Use VLC as the media player.
 \fB\-S | --select-nth\fR \fI\,<index>\/\fR
 Selects nth entry.
 .TP
+\fB\-P | --page\fR \fI\,<page>\/\fR
+Search page number to start from (25 results per page). The search menu also offers a "load more results" entry to page interactively.
+.TP
+\fB\--parallel\fR \fI\,<jobs>\/\fR
+Download up to \fI\,<jobs>\/\fR episodes concurrently with --batch. Default is 1 (sequential).
+.TP
+\fB\--auto-play\fR
+Keep playing the following episodes automatically when one finishes (mpv only).
+.TP
 \fB\-N | --nextep-countdown\fR
 Prints a countdown to the next episode as the last episode in the list. If in history is after the current episode.
 .TP
@@ -62,7 +71,7 @@ Play the dubbed version. Without this flag, it'll always play the subbed version
 Use rofi instead of fzf for the interactive menu
 .TP
 \fB\--skip\fR
-Use ani-skip to skip the intro of the episode (mpv only)
+Skip the intro/outro of the episode (mpv only). Uses the bundled aniskip integration (queries api.aniskip.com via the MyAnimeList id the embed provides), falling back to the ani-skip binary if it is installed.
 .TP
 \fB\--no-detach\fR
 Don't detach the player (useful for in-terminal playback, mpv only)
@@ -85,7 +94,13 @@ ani-cli v5 uses environment variables to control unstable/untested and niche fea
 Controls the scraped media's mode, valid options are sub or dub. Default is sub.
 .TP
 \fBANI_CLI_DOWNLOAD_DIR\fR
-Controls the directory where files are downloaded. Default is the current dir.
+Controls the directory where files are downloaded. Downloads are placed in a per-anime subfolder (eg. $DOWNLOAD_DIR/One Piece/Episode 1.mp4). Default is the current dir.
+.TP
+\fBANI_CLI_PARALLEL\fR
+Controls how many episodes are downloaded concurrently with --batch. Equivalent to --parallel. Default is 1.
+.TP
+\fBANI_CLI_AUTO_PLAY\fR
+Controls if episodes play one after another automatically (mpv only). Equivalent to --auto-play. Can be 0 (disabled) or 1 (enabled). Default is 0.
 .TP
 \fBANI_CLI_QUALITY\fR
 Controls the scraped media's quality, check hianime.at for valid options or set to worst/best. Default is best.
@@ -109,7 +124,7 @@ Controls the logging feature for playback. Can be 1(logs) or 0(doesn't log). Def
 Controls the directory ani-cli uses for storing history. A /ani-cli subfolder is created there for the histfile if doesn't exists. Default is $XDG_STATE_HOME if set, $HOME/.local/state if not.
 .TP
 \fBANI_CLI_SKIP_INTRO\fR
-Controls if ani-skip is used to skip intros (works with mpv only). Can be 0 (disabled) or 1 (enabled). Default is 0.
+Controls if intros/outros are skipped (works with mpv only). Uses the bundled aniskip integration, or the ani-skip binary if installed. Can be 0 (disabled) or 1 (enabled). Default is 0.
 .TP
 \fBANI_CLI_NO_DETACH\fR
 Controls if mpv is detached from the main process for playback, which can be useful for use with terminal renderers such as kitty. (works with mpv only). Can be 0 (disabled) or 1 (enabled). Default is 0.

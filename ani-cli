@@ -1,6 +1,6 @@
 #!/bin/sh
 
-version_number="5.1.3"
+version_number="5.2.0"
 
 # UI
 
@@ -69,6 +69,12 @@ help_info() {
         Use Syncplay to watch with friends
       -S, --select-nth
         Select nth entry
+      -P, --page
+        Search page number to start from
+      --parallel
+        Download N episodes concurrently with --batch
+      --auto-play
+        Keep playing the following episodes when one finishes (mpv only)
       -q, --quality
         Specify the video quality
       -v, --vlc
@@ -86,7 +92,8 @@ help_info() {
       --dmenu
         Use dmenu instead of fzf for the interactive menu
       --skip
-        Use ani-skip to skip the intro of the episode (mpv only)
+        Skip the intro/outro of the episode (mpv only; uses the bundled
+        aniskip integration, or ani-skip if it is installed)
       --no-detach
         Don't detach the player (useful for in-terminal playback, mpv only)
       --exit-after-play
@@ -161,7 +168,8 @@ where_mpv() {
 
 cleanup() {
     tput sgr0 2>/dev/null          # clears colors
-    rm -f "${histfile}.new" "/tmp/ani-cli-mpv-$$" # remove temp logfile and stale mpv ipc socket
+    # remove temp logfile, stale mpv ipc socket, skip script and history lock
+    rm -f "${histfile}.new" "${histfile}.lock" "/tmp/ani-cli-mpv-$$" "/tmp/ani-cli-skip-$$.lua"
 }
 
 # SCRAPING
@@ -197,6 +205,11 @@ b64_decode() {
     printf "%s\n" "$1" | base64 -d 2>/dev/null || printf "%s\n" "$1" | base64 -D 2>/dev/null || printf "%s\n" "$1" | openssl base64 -d -A 2>/dev/null
 }
 
+# percent-encode whitespace and common url-unsafe characters
+urlencode() {
+    printf "%s" "$1" | tr ' ' '+' | sed -e 's|&|%26|g' -e 's|=|%3D|g' -e "s|'|%27|g" -e 's|"|%22|g' -e 's|#|%23|g' -e 's|?|%3F|g' -e 's|/|%2F|g' -e 's|\||%7C|g'
+}
+
 # the embed page ships its config as base64(json XOR "otaku-embed-v1"), this prints the json.
 # runs in a subshell so the key bytes can live in the positional parameters and rotate with shift.
 deobfuscate_blob() (
@@ -212,18 +225,86 @@ deobfuscate_blob() (
     printf "%b" "$_output"
 )
 
-# search the query and give results. format is (id \t name)
+# search query $1 on page ${2:-1}: 30 results, format is (id \t title \t type \t duration).
+# type/duration come from the fd-infor spans and let a search present films, OVAs, etc.
 hianime_search() {
     #shellcheck disable=SC2059
-    _page="$(hianime_curl "$(printf "$search_api" "$1")")" || return 1
+    _page="$(hianime_curl "$(printf "$search_api" "$(urlencode "$1")" "${2:-1}")")" || return 1
     if printf "%s" "$_page" | grep -qi "<title>Just a moment"; then
         [ "$curl_exe" = "curl" ] && die "Blocked by cloudflare. Try installing curl-impersonate"
         die "Blocked by cloudflare."
     fi
-    # the top 10 sidebar repeats the result markup, cut it off before flattening the page
+    # the top-10 sidebar repeats the result markup, cut it off before flattening the page
     printf "%s" "$_page" | sed '/id="main-sidebar"/,$d' | tr '\n' ' ' | sed 's|<div class="film-detail">|\n<div class="film-detail">|g' |
-        sed -nE 's|.*<h3 class="film-name">[[:space:]]*<a href="[^"]*/([^"/]*)"[[:space:]]*title="([^"]*)".*|\1\t\2|p' |
+        awk '
+            {
+                b = $0
+                slug = ""; t = ""; ty = ""; du = ""
+                if (match(b, /href="[^"]*"/)) {
+                    u = substr(b, RSTART + 6, RLENGTH - 7)
+                    p = 0
+                    for (;;) { q = index(substr(u, p + 1), "/"); if (q == 0) break; p = p + q }
+                    slug = substr(u, p + 1)
+                }
+                if (slug ~ /\./) next
+                p = index(b, "title=\"")
+                if (p > 0) {
+                    q = index(substr(b, p + 7), "\"")
+                    t = substr(b, p + 7, q - 1)
+                }
+                p = index(b, "<span class=\"fdi-item\">")
+                if (p > 0) {
+                    q = index(substr(b, p + 23), "</span>")
+                    ty = substr(b, p + 23, q - 1)
+                }
+                p = index(b, "class=\"fdi-item fdi-duration\">")
+                if (p > 0) {
+                    q = index(substr(b, p + 30), "</span>")
+                    du = substr(b, p + 30, q - 1)
+                }
+                if (ty == "" && du == "") next
+                if (t == "" || slug == "") next
+                print slug "\t" t "\t" ty "\t" du
+            }
+        ' |
         sed -e "s|&#039;|'|g" -e 's|&quot;|"|g' -e "s|&amp;|\&|g"
+}
+
+# print 1 if search page $2's html $1 has a following page, nothing otherwise
+hianime_has_next() {
+    _cur="${2:-1}"
+    _next="$(printf "%s" "$1" | grep -o 'title="Next" class="page-link" href="[^"]*"' | sed -nE 's|.*page=([0-9]+)|\1|p')"
+    [ -n "$_next" ] && [ "$_next" -gt "$_cur" ]
+}
+
+# pick an anime from enhanced search results (id \t title \t type \t duration).
+# appends a "load more" entry to page within the search when $1 is non-empty.
+search_pick() {
+    _input=$(cat -)
+    [ -z "$_input" ] && return 1
+    _count="$(printf "%s\n" "$_input" | wc -l | tr -d "[:space:]")"
+    [ "$_count" -eq 1 ] && printf "%s" "$_input" && return 0
+    _multi=""
+    [ $# -ge 2 ] && _multi="$2"
+    _display="$(printf "%s\n" "$_input" | awk -F'\t' '{
+        line = $1 "  " $2
+        if ($3 != "" || $4 != "") {
+            line = line " ["
+            if ($3 != "") line = line $3
+            if ($4 != "") { if ($3 != "") line = line " | "; line = line $4 }
+            line = line "]"
+        }
+        print line
+    }')"
+    [ -n "$1" ] && _display="$(printf "%s\n%s" "$_display" "load_more_page  ▶ Load more results")"
+    _picked="$(printf "%s\n" "$_display" | menu "Select anime: " "$_multi" "$menu_extra_flags")"
+    [ -n "$_picked" ] || return 1
+    for _pid in $(printf "%s\n" "$_picked" | awk '{print $1}'); do
+        case "$_pid" in
+            load_more_page) printf "%s\n" "$_pid" ;;
+            *) printf "%s\n" "$_input" | awk -F'\t' -v id="$_pid" '$1==id' ;;
+        esac
+    done
 }
 
 # get the episodes list of the selected anime. format is (id \t ep_no)
@@ -235,7 +316,6 @@ hianime_episodes() {
         sed -nE "s|.*data-number=\"([^\"]*)\".*data-id=\"([0-9]+)\".*/watch/${1}[?]ep=.*|\\2\\t\\1|p"
 }
 
-# resolves episode $1 in mode $2 (sub/dub): sets links (quality >url per line), sub_link, mal_id and refr
 hianime_m3u8() {
     _ep_id=$(printf "%s" "$episode_maps" | sed -nE "s|^([0-9]+)\t${1}$|\1|p")
     #shellcheck disable=SC2059
@@ -290,6 +370,60 @@ get_video_link() {
     fi
 }
 
+# build --script/--script-opts flags for mpv intro/outro skipping.
+# uses the ani-skip binary when present, otherwise falls back to a bundled mpv
+# script and the public aniskip.com API.
+skip_opts() {
+    [ -n "$mal_id" ] || { warn "Couldn't find the MyAnimeList id of this anime, intro skipping disabled"; return 1; }
+    # use the ani-skip binary if installed (it handles the full workflow including fzf)
+    if command -v ani-skip >/dev/null 2>&1; then
+        _out="$(ani-skip -i "$mal_id" -e "$ep_no" 2>/dev/null)" && printf "%s" "$_out" && return 0
+    fi
+    # fetch op/ed timestamps from the public aniskip API
+    _json="$($curl_exe -sL -A "$agent" --connect-timeout 5 "https://api.aniskip.com/v1/skip-times/${mal_id}/${ep_no}?types=op&types=ed")"
+    [ -z "$_json" ] && return 1
+    printf "%s" "$_json" | grep -q '"found":true' || { info "No skip times for this episode"; return 1; }
+    _op_start="" ; _op_end="" ; _ed_start="" ; _ed_end=""
+    _op="$(printf "%s" "$_json" | grep -oE '"interval":\{"start_time":[0-9.]+,"end_time":[0-9.]+\},"skip_type":"op"' | head -n1)"
+    _ed="$(printf "%s" "$_json" | grep -oE '"interval":\{"start_time":[0-9.]+,"end_time":[0-9.]+\},"skip_type":"ed"' | head -n1)"
+    case "$_op" in *'"skip_type":"op"'*)
+        _op_start="$(printf "%s" "$_op" | sed -nE 's|.*"start_time":([0-9.]+).*|\1|p')"
+        _op_end="$(printf "%s" "$_op" | sed -nE 's|.*"end_time":([0-9.]+).*|\1|p')"
+        ;; esac
+    case "$_ed" in *'"skip_type":"ed"'*)
+        _ed_start="$(printf "%s" "$_ed" | sed -nE 's|.*"start_time":([0-9.]+).*|\1|p')"
+        _ed_end="$(printf "%s" "$_ed" | sed -nE 's|.*"end_time":([0-9.]+).*|\1|p')"
+        ;; esac
+    _opts=""
+    if [ -n "$_op_start" ] && [ -n "$_op_end" ]; then
+        _opts="skip-op_start=$_op_start,skip-op_end=$_op_end"
+    fi
+    if [ -n "$_ed_start" ] && [ -n "$_ed_end" ]; then
+        [ -n "$_opts" ] && _opts="$_opts,"
+        _opts="$_opts"$(printf "skip-ed_start=%s,skip-ed_end=%s" "$_ed_start" "$_ed_end")
+    fi
+    [ -z "$_opts" ] && { info "No skip times for this episode"; return 1; }
+    # write the bundled mpv script (read once at launch, safe to unlink after)
+    _skip_lua="/tmp/ani-cli-skip-$$.lua"
+    # shellcheck disable=SC2016
+    cat > "$_skip_lua" <<'EOFSKIP'
+local mpv = require("mp")
+local o = {op_start = 0, op_end = 0, ed_start = 0, ed_end = 0}
+require("mp.options").read_options(o, "skip")
+local function s()
+    local p = mpv.get_property_number("time-pos")
+    if not p then return end
+    if p >= o.op_start and p < o.op_end then
+        mpv.set_property_number("time-pos", o.op_end)
+    elseif p >= o.ed_start and p < o.ed_end then
+        mpv.set_property_number("time-pos", o.ed_end)
+    end
+end
+mpv.observe_property("time-pos", "number", s)
+EOFSKIP
+    printf -- "--script=%s --script-opts=%s" "$_skip_lua" "$_opts"
+}
+
 time_until_next_ep() {
     animeschedule="https://animeschedule.net"
     query="$(printf "%s\n" "$*" | tr ' ' '+')"
@@ -308,7 +442,9 @@ time_until_next_ep() {
 # PLAYING
 
 process_hist_entry() {
-    ep_list=$(hianime_episodes "$id" | cut -f 2)
+    ep_list=$(hianime_episodes "$id" 2>/dev/null | cut -f 2)
+    # skip stale/legacy entries that the current provider can't resolve anymore
+    [ -z "$ep_list" ] && return 1
     latest_ep=$(printf "%s\n" "$ep_list" | tail -n1)
     title=$(printf "%s\n" "$title" | sed "s|[0-9]\+ episodes|${latest_ep} episodes|")
     ep_no=$(printf "%s" "$ep_list" | sed -n "/^${ep_no}$/{n;p;}")
@@ -318,6 +454,13 @@ process_hist_entry() {
 
 update_history() {
     _pos="${1:-0}"
+    # serialize concurrent history writes (parallel downloads)
+    _lock_tries=0
+    while ! mkdir "${histfile}.lock" 2>/dev/null; do
+        _lock_tries=$((_lock_tries + 1))
+        [ "$_lock_tries" -gt 100 ] && return 1
+        sleep 0.2
+    done
     if grep -q "	${id}	" "$histfile"; then
         awk -F'\t' -v OFS='\t' -v id="$id" -v ep_no="$ep_no" -v title="$title" -v pos="$_pos" '
             $2 == id { $1=ep_no; $3=title; $4=pos }
@@ -328,6 +471,7 @@ update_history() {
         printf "%s\t%s\t%s\t%s\n" "$ep_no" "$id" "$title" "$_pos" >>"${histfile}.new"
     fi
     mv "${histfile}.new" "$histfile"
+    rmdir "${histfile}.lock" 2>/dev/null
 }
 
 backup_old_hist() {
@@ -367,9 +511,20 @@ save_position_and_cleanup() {
 
 resume_episode() {
     _hist_id="$1"
-    _pos=$(grep -F -- "$_hist_id" "$histfile" | cut -f4)
+    _row=$(grep -F -- "$_hist_id" "$histfile")
+    # only resume mid-episode if the saved position belongs to the episode about to play
+    _hist_ep=$(printf "%s" "$_row" | cut -f1)
+    [ -n "$_hist_ep" ] && [ "$_hist_ep" != "$ep_no" ] && return 1
+    _pos=$(printf "%s" "$_row" | cut -f4)
     [ -z "$_pos" ] || [ "$_pos" = "0" ] && return 1
     printf "%.0f" "$_pos"
+}
+
+# call after anime_title is known: put downloads in their own per-anime folder
+prepare_download_dir() {
+    _dir="$(printf "%s" "$anime_title" | sed -e 's/^[[:space:]]*//; s/[[:space:]]*$//; s/[[:space:]]\{1,\}/ /g; s|/|_|g')"
+    download_dir="$download_base_dir/$_dir"
+    [ -n "$_dir" ] && mkdir -p "$download_dir" 2>/dev/null
 }
 
 # shellcheck disable=SC2086
@@ -456,14 +611,14 @@ android_mpv() {
 play_episode() {
     _mpv_pid=""
     [ "$log_episode" = 1 ] && [ "$player_function" != "debug" ] && [ "$player_function" != "download" ] && command -v logger >/dev/null && logger -t ani-cli "${anime_title}${ep_no}"
-    if [ "$skip_intro" = 1 ]; then
-        if [ -n "$mal_id" ]; then
-            skip_flag="$(ani-skip -i "$mal_id" -e "$ep_no")"
-        else
-            warn "Couldn't find the MyAnimeList id of this anime, intro skipping disabled"
-        fi
-    fi
     [ -z "$episode" ] && get_video_link
+    case "$player_function" in
+        mpv*|flatpak_mpv)
+            if [ "$skip_intro" = 1 ]; then
+                skip_flag="$(skip_opts)" || skip_flag=""
+            fi
+            ;;
+    esac
 
     # wait for the previous player to close before starting a new one
     wait 2>/dev/null
@@ -500,7 +655,7 @@ play_episode() {
             else
                 $player_function $_mpv_args $skip_flag ${sub_link:+--sub-file="$sub_link"} $refr_flag $bacc_flag --tls-verify=no --force-media-title="${anime_title} Episode ${ep_no}" "$episode" $player_extra_flags
                 mpv_exitcode=$?
-                [ "$exit_after_play" = 1 ] && [ -z "$range" ] && exit "$mpv_exitcode"
+                [ "$exit_after_play" = 1 ] && [ -z "$range" ] && [ "$auto_play" != 1 ] && exit "$mpv_exitcode"
             fi
             ;;
         android_mpv) "$player_function" "$episode" "${anime_title} Episode ${ep_no}" "--tls-verify=no $refr_flag $bacc_flag" $player_extra_flags 2>&1 & ;;
@@ -524,7 +679,7 @@ play_episode() {
             ;;
         vlc*) nohup $player_function --http-referrer="${refr_flag#--referrer=}" --play-and-exit --meta-title="${anime_title} Episode ${ep_no}" "$episode" ${sub_link:+:input-slave="$sub_link"} $player_extra_flags >/dev/null 2>&1 & ;;
         *yncpla*) nohup $player_function "$episode" $player_extra_flags -- ${sub_link:+--sub-file="$sub_link"} --tls-verify=no --force-media-title="${anime_title} Episode ${ep_no}" $refr_flag >/dev/null 2>&1 & ;;
-        download) "$player_function" "$episode" "${anime_title} Episode ${ep_no}" $player_extra_flags ;;
+        download) "$player_function" "$episode" "Episode ${ep_no}" $player_extra_flags ;;
         catt) nohup catt cast "$episode" $player_extra_flags >/dev/null 2>&1 & ;;
         iSH)
             printf "\e]8;;vlc://%s\a~~~~~~~~~~~~~~~~~~~~\n~ Tap to open VLC ~\n~~~~~~~~~~~~~~~~~~~~\e]8;;\a\n" "$episode"
@@ -577,6 +732,11 @@ play() {
         if [ "$batch_mode" = 1 ]; then
             _total=$(printf "%s\n" "$range" | wc -l | tr -d " ")
             _count=0
+            if [ "$parallel" -gt 1 ]; then
+                info "Downloading $_total episodes with $parallel parallel jobs..."
+                parallel_batch_dl "$parallel"
+                return 0
+            fi
         fi
 
         for i in $range; do
@@ -586,7 +746,7 @@ play() {
                 _count=$((_count + 1))
                 printf "\33[2K\r\033[1;34m[%s/%s] Downloading episode %s...\033[0m\n" "$_count" "$_total" "$ep_no"
                 # skip if already downloaded
-                _fname="${anime_title} Episode ${ep_no}.mp4"
+                _fname="Episode ${ep_no}.mp4"
                 if [ -f "$download_dir/$_fname" ]; then
                     printf "\33[2K\r\033[1;33mSkipping episode %s (already exists)\033[0m\n" "$ep_no"
                     continue
@@ -597,6 +757,14 @@ play() {
             [ "$i" = "$end" ] && unset range
             play_episode
         done
+    elif [ "$auto_play" = 1 ] && [ "$batch_mode" != 1 ]; then
+        # keep watching the series, automatically advancing to the next episode
+        while :; do
+            play_episode
+            _next_ep="$(printf "%s\n" "$ep_list" | sed -n "/^${ep_no}$/{n;p;}" 2>/dev/null)"
+            [ -z "$_next_ep" ] && break
+            ep_no="$_next_ep"
+        done
     else
         play_episode
     fi
@@ -604,11 +772,32 @@ play() {
     [ "$player_function" != "debug" ] && [ "$player_function" != "download" ] && tput rc 2>/dev/null && tput ed 2>/dev/null
 }
 
+# run parallel downloads in batches of $1 concurrent episodes
+parallel_batch_dl() {
+    _jobs=0
+    for i in $range; do
+        ep_no=$i
+        _fname="Episode ${ep_no}.mp4"
+        if [ -f "$download_dir/$_fname" ]; then
+            printf "\33[2K\r\033[1;33mSkipping episode %s (already exists)\033[0m\n" "$ep_no"
+            continue
+        fi
+        [ "$i" = "$end" ] && unset range
+        play_episode &
+        _jobs=$((_jobs + 1))
+        if [ "$_jobs" -ge "$1" ]; then
+            wait
+            _jobs=0
+        fi
+    done
+    wait
+}
+
 # MAIN
 
 # setup
 base_api="https://hianime.at"
-search_api="${base_api}/search?keyword=%s"
+search_api="${base_api}/search?keyword=%s&page=%s"
 episodes_api="${base_api}/api/theme/episode/list/%s"
 servers_api="${base_api}/api/theme/episode/servers?episodeId=%s"
 ciphers='ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305'
@@ -617,6 +806,7 @@ agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
 
 mode="${ANI_CLI_MODE:-sub}"
 download_dir="${ANI_CLI_DOWNLOAD_DIR:-.}"
+download_base_dir="$download_dir"
 log_episode="${ANI_CLI_LOG:-1}"
 quality="${ANI_CLI_QUALITY:-best}"
 bacc_flag=""
@@ -638,6 +828,9 @@ player_extra_flags="${ANI_CLI_PLAYER_FLAGS:-}"
 no_detach="${ANI_CLI_NO_DETACH:-0}"
 exit_after_play="${ANI_CLI_EXIT_AFTER_PLAY:-0}"
 skip_intro="${ANI_CLI_SKIP_INTRO:-0}"
+auto_play="${ANI_CLI_AUTO_PLAY:-0}"
+parallel="${ANI_CLI_PARALLEL:-1}"
+page=1
 menu_program="${ANI_CLI_MENU:-fzf}"
 menu_extra_flags="${ANI_CLI_MENU_FLAGS:-}"
 
@@ -691,6 +884,17 @@ while [ $# -gt 0 ]; do
             index="$2"
             shift
             ;;
+        -P | --page)
+            [ $# -lt 2 ] && die "missing argument!"
+            case "$2" in ''|*[!0-9]*) die "page must be a number!" ;; *) page="$2" ;; esac
+            shift
+            ;;
+        --parallel)
+            [ $# -lt 2 ] && die "missing argument!"
+            case "$2" in ''|*[!0-9]*) die "parallel must be a number!" ;; *) parallel="$2" ;; esac
+            shift
+            ;;
+        --auto-play) auto_play=1 ;;
         -c | --continue) search=history ;;
         --resume) resume_enabled=1 ;;
         --batch)
@@ -749,7 +953,6 @@ done
 info "Checking dependencies..."
 dep_ch "sed"
 dep_ch "grep"
-[ "$skip_intro" = 1 ] && dep_ch "ani-skip"
 dep_ch "$menu_program"
 case "$player_function" in
     debug) ;;
@@ -785,6 +988,7 @@ case "$search" in
         ep_list=$(printf "%s" "$episode_maps" | cut -f2)
         ep_no=$(printf "%s" "$anime_list" | grep -F "$id" | cut -f2 | sed -nE 's/.*- episode (.+)$/\1/p')
         anime_title="$(printf "%s" "$title" | cut -d'(' -f1 | tr -d '[:punct:]')"
+        [ "$player_function" = "download" ] && prepare_download_dir
         printf "%s" "$anime_list" | grep -F "$id" | cut -f2 | grep -q "(up to date)" && time_until_next_ep "$anime_title"
         ;;
     *)
@@ -799,15 +1003,30 @@ case "$search" in
         # for checking new releases by specifying anime name
         [ "$search" = "nextep" ] && time_until_next_ep "$query"
 
-        anime_list=$(hianime_search "$query") || exit 1
-        [ -z "$anime_list" ] && die "No results found!"
-        # check if select-nth index is a valid number, if so skip interactive selection
-        [ "$index" -eq "$index" ] 2>/dev/null && result=$(printf "%s" "$anime_list" | sed -n "${index}p")
-        [ -z "$index" ] && result=$(printf "%s" "$anime_list" | nl -w 2 | sed 's/^[[:space:]]//' | nth "Select anime: ")
+        _page="${page:-1}"
+        _results=""
+        while :; do
+            _page_results="$(hianime_search "$query" "$_page")" || exit 1
+            # results repeat across page boundaries: keep only the first occurrence
+            _results="$(printf "%s\n%s\n" "$_results" "$_page_results" | sed '/^$/d' | awk -F'\t' '!seen[$1]++')"
+            [ -z "$_results" ] && die "No results found!"
+            # check if select-nth index is a valid number, if so skip interactive selection
+            if [ "$index" -eq "$index" ] 2>/dev/null; then
+                result="$(printf "%s" "$_results" | sed -n "${index}p")"
+                break
+            fi
+            _has_next="$(hianime_has_next "$_page_results" "$_page")"
+            result="$(printf "%s" "$_results" | search_pick "$_has_next")"
+            case "$result" in
+                *load_more_page*) _page=$((_page + 1)); continue ;;
+            esac
+            break
+        done
         [ -z "$result" ] && die "Invalid/No Anime Selection"
         title="$(printf "%s" "$result" | cut -f2)"
         anime_title="$(printf "%s" "$title" | cut -d'(' -f1 | tr -d '[:punct:]')"
         id="$(printf "%s" "$result" | cut -f1)"
+        [ "$player_function" = "download" ] && prepare_download_dir
         episode_maps=$(hianime_episodes "$id") || exit 1
         ep_list=$(printf "%s" "$episode_maps" | cut -f2)
         # -1 (last episode) is always valid; ranges/multiples/decimals are validated by play()

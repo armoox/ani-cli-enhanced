@@ -98,6 +98,9 @@ help_info() {
         Don't detach the player (useful for in-terminal playback, mpv only)
       --exit-after-play
         Exit the player, and return the player exit code (useful for non interactive scenarios, mpv only)
+      --cache-size
+        mpv buffer window kept for seeking in both directions
+        (bytesize like 1GiB, default: \$ANI_CLI_CACHE or 1GiB)
 
       -N, --nextep-countdown
         Display a countdown to the next episode
@@ -379,7 +382,11 @@ get_video_link() {
     # failed" and reconnects), so use http_persistent=0 to open a fresh connection
     # per segment (fast, curl-like) and --cache=yes so mpv greedily pre-buffers the
     # whole episode instead of stuttering.
-    bacc_flag="--cache=yes --stream-lavf-o=http_persistent=0 --demuxer-readahead-secs=60 --demuxer-max-bytes=50MiB"
+    # the buffer window is symmetric ($ani_cache in both directions): mpv evicts
+    # already-played packets from the back buffer once the window fills, so a
+    # small --demuxer-max-bytes makes backward seeking fail.  keep both limits on
+    # the same budget so you can seek forward AND back through the episode.
+    bacc_flag="--cache=yes --stream-lavf-o=http_persistent=0 --demuxer-readahead-secs=60 --demuxer-max-bytes=$ani_cache --demuxer-max-back-bytes=$ani_cache"
     # should never trigger but just in case
     if printf "%s" "$ep_list" | grep -q "^$ep_no$"; then
         [ -z "$episode" ] && die "Episode is released, but no valid sources!"
@@ -848,6 +855,7 @@ exit_after_play="${ANI_CLI_EXIT_AFTER_PLAY:-0}"
 skip_intro="${ANI_CLI_SKIP_INTRO:-0}"
 auto_play="${ANI_CLI_AUTO_PLAY:-0}"
 parallel="${ANI_CLI_PARALLEL:-1}"
+ani_cache="${ANI_CLI_CACHE:-1GiB}"
 page=1
 menu_program="${ANI_CLI_MENU:-fzf}"
 menu_extra_flags="${ANI_CLI_MENU_FLAGS:-}"
@@ -910,6 +918,12 @@ while [ $# -gt 0 ]; do
         --parallel)
             [ $# -lt 2 ] && die "missing argument!"
             case "$2" in ''|*[!0-9]*) die "parallel must be a number!" ;; *) parallel="$2" ;; esac
+            shift
+            ;;
+        --cache-size)
+            [ $# -lt 2 ] && die "missing argument!"
+            printf "%s" "$2" | grep -qE '^[0-9]+([.][0-9]+)?([KMGTPkmgtp]i?B?)?$' || die "cache size must be a bytesize like 1GiB!"
+            ani_cache="$2"
             shift
             ;;
         --auto-play) auto_play=1 ;;

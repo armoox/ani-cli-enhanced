@@ -79,6 +79,9 @@ Don't detach the player (useful for in-terminal playback, mpv only)
 \fB\--exit-after-play\fR
 Exit the player, and return the player exit code (useful for non interactive scenarios, mpv only)
 .TP
+\fB\--cache-size\fR
+mpv buffer window kept for seeking in both directions, as a bytesize (eg. 1GiB). Default is 1GiB, or whatever \fBANI_CLI_CACHE\fR is set to. A small window evicts already-played data, so backward seeking silently stops working near the start of the episode.
+.TP
 \fB\--batch\fR
 Download all episodes of found anime (with progress).
 .TP
@@ -98,6 +101,9 @@ Controls the directory where files are downloaded. Downloads are placed in a per
 .TP
 \fBANI_CLI_PARALLEL\fR
 Controls how many episodes are downloaded concurrently with --batch. Equivalent to --parallel. Default is 1.
+.TP
+\fBANI_CLI_CACHE\fR
+mpv buffer window kept for seeking, applied symmetrically so you can seek both forward and backward. Bytesize (eg. 512MiB, 2GiB). Default is 1GiB. Note that a value of 0 disables the back buffer entirely (forward seek range starts after the current position); prefer a size instead.
 .TP
 \fBANI_CLI_AUTO_PLAY\fR
 Controls if episodes play one after another automatically (mpv only). Equivalent to --auto-play. Can be 0 (disabled) or 1 (enabled). Default is 0.

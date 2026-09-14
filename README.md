@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://anineko.to/img/logo.png?v=4" alt="anineko.to" width="200">
+  <img src="https://hianime.at/img/logo.png?v=4" alt="hianime.at" width="200">
   <p><strong>Watch anime from your terminal.</strong></p>
 
   <p>
@@ -17,7 +17,7 @@
 
 ---
 
-A fork of [pystardust/ani-cli](https://github.com/pystardust/ani-cli) — built around [anineko.to](https://anineko.to) with CDN-tolerant playback
+A fork of [pystardust/ani-cli](https://github.com/pystardust/ani-cli) — built around [hianime.at](https://hianime.at) with CDN-tolerant playback
 
 ### Quick start
 

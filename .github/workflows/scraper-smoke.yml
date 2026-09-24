@@ -35,5 +35,6 @@ jobs:
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
           eps="$(curl -fsSL -A "$UA" --max-time 15 "https://hianime.at/api/theme/episode/list/481")"
           printf '%s' "$eps" | grep -q '"status":true' || { echo 'episodes API: unexpected response'; exit 1; }
-          printf '%s' "$eps" | grep -q 'data-id="[0-9][0-9]*"' || { echo 'episodes API: no episode rows'; exit 1; }
+          # the api escapes its html quotes, mirror the script's unescape before matching
+          printf '%s' "$eps" | sed 's|\\||g' | grep -q 'data-id="[0-9][0-9]*"' || { echo 'episodes API: no episode rows'; exit 1; }
           echo "episodes API OK (Frieren id 481)"

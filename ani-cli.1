@@ -135,6 +135,9 @@ Controls the logging feature for playback. Can be 1(logs) or 0(doesn't log). Def
 \fBANI_CLI_HIST_DIR\fR
 Controls the directory ani-cli uses for storing history. A /ani-cli subfolder is created there for the histfile if doesn't exists. Default is $XDG_STATE_HOME if set, $HOME/.local/state if not.
 .TP
+\fBANI_CLI_HTTP_TIMEOUT\fR
+Timeout in seconds for each scraping request (search, episodes, embed page and master playlist). Slow responses are retried where it matters, so a generous value is fine. Default is 20.
+.TP
 \fBANI_CLI_SKIP_INTRO\fR
 Controls if intros/outros are skipped (works with mpv only). Uses the bundled aniskip integration, or the ani-skip binary if installed. Can be 0 (disabled) or 1 (enabled). Default is 0.
 .TP

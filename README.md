@@ -21,7 +21,7 @@ A fork of [pystardust/ani-cli](https://github.com/pystardust/ani-cli) — built 
 
 ### Features
 
-- **Buffer that stays seekable** — mpv gets a symmetric RAM window (`--cache-size`, default 1GiB) *plus* a disk-spilled cache (`--cache-on-disk`, default on), so you can scrub forward **and** backward through the whole episode or movie without re-buffering; even the shard CDN's dropped keep-alive connections don't cause stutters
+- **Buffer that stays seekable** — mpv gets a symmetric RAM window (`--cache-size`, default 1GiB) *plus* a disk-spilled cache (`--cache-on-disk`, default on), so you can scrub forward **and** backward through the whole episode or movie without re-buffering; dropped shard-CDN connections auto-reconnect (lavf) and a network timeout caps how long a dead connection can stall rather than freezing playback
 - **Rich search** — results show type & duration, the id slug is hidden, and menus can page through every result (`-P/--page` or the "load more" entry)
 - **Download manager** — per-anime folders (`$DOWNLOAD_DIR/One Piece/Episode 1.mp4`), `--batch` for whole series, and concurrent downloads (`--parallel N` / `ANI_CLI_PARALLEL`)
 - **Skip intro & outro** — bundled MyAnimeList-based integration that needs no `ani-skip` binary (`--skip` / `ANI_CLI_SKIP_INTRO`)

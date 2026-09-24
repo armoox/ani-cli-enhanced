@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > The version number also drives the built-in `-U` updater: users on an older
 > release are offered the update as soon as the new version lands on `master`.
 
+## [5.4.0] - 2026-09-25
+
+### Changed
+- Streaming resilience: mpv now auto-reconnects dropped shard connections
+  (`stream-lavf-o=reconnect=1,reconnect_streamed=1`) and a `--network-timeout=20`
+  caps how long a dead connection can stall playback before it reconnects
+  (mpv's default freeze is a full 60s)
+- Embed page is now fetched with the hianime referer (some hosts 403 without one)
+- Master playlist fetch retries once on a transient empty parse
+- Scraping timeout is configurable via `ANI_CLI_HTTP_TIMEOUT` (default 20s,
+  was a fixed 10s which could fail on slow embed/playlist pages)
+
+### Fixed
+- `-q 720p` (trailing `p`) now matches correctly instead of silently falling
+  back to best quality; `-q 720` still works
+- `--parallel 0` is rejected with a clear error instead of behaving erratically
+- Parallel batch downloads no longer clobber each other's `/tmp` scratch files
+  (`$$` is shared by sibling jobs; temp names are now per-episode)
+- `--batch` no longer skips episodes whose previous download left a 0-byte file
+
 ## [5.3.0] - 2026-09-25
 
 ### Added

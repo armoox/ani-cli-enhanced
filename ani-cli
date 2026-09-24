@@ -1,6 +1,6 @@
 #!/bin/sh
 
-version_number="5.3.0"
+version_number="5.4.0"
 
 # UI
 
@@ -183,7 +183,7 @@ cleanup() {
 #shellcheck disable=SC2086
 hianime_curl() {
     _curl_status=0
-    _response="$($curl_exe -sL -A "$agent" --max-time 10 $cipher_flag \
+    _response="$($curl_exe -sL -A "$agent" --max-time "$http_timeout" $cipher_flag \
         -w ' %{http_code}' "$@")" || _curl_status=$?
 
     _http_code=${_response##* }
@@ -354,7 +354,8 @@ hianime_m3u8() {
     # the stream host wants the embed site as referer, and the embed url carries the mal id for ani-skip
     refr="$(printf "%s" "$_embed" | sed -E 's|^(https?://[^/]*).*|\1/|')"
     mal_id="$(printf "%s" "$_embed" | sed -nE 's|.*/mal/([0-9]+)/.*|\1|p')"
-    _blob="$(hianime_curl "$_embed" | sed -nE 's|.*window\.__P="([^"]*)".*|\1|p')"
+    # fetch the embed page with the anime site as referer; some hosts 403 without one
+    _blob="$(hianime_curl "$_embed" -e "${base_api}/" | sed -nE 's|.*window\.__P="([^"]*)".*|\1|p')"
     [ -z "$_blob" ] && { warn "The embed player page didn't expose a window.__P blob; the player may have changed or is blocking this client"; return 1; }
     _json="$(deobfuscate_blob "$_blob")"
     printf "%s" "$_json" | grep -q '^{' || { warn "Embed config couldn't be decrypted; the site likely rotated its obfuscation key (see deobfuscate_blob)"; return 1; }
@@ -362,8 +363,14 @@ hianime_m3u8() {
     [ -z "$_m3u8_master" ] && { warn "No m3u8 master url in the embed config for episode ${1} (${2})"; return 1; }
     # several languages can be listed, the site marks the english track as default
     sub_link="$(printf "%s" "$_json" | sed 's|.*"subtitles":\[||; s|\].*||; s|},{|}\n{|g' | grep -m 1 '"default":true' | sed -nE 's|.*"src":"([^"]*)".*|\1|p')"
-    # quality variants are relative to the master playlist
-    links="$(hianime_curl "$_m3u8_master" -e "$refr" | sed 's|^#EXT-X-STREAM.*x||g; s|,.*|p|g; /^#/d; $!N; s|\n| >|;/EXT-X-I-FRAME/d' | sed "\|>https*://|!s|>|>${_m3u8_master%/*}/|" | sort -g -r -s)"
+    # quality variants are relative to the master playlist; retry once on a
+    # transient empty parse (shard hiccup) before giving up on the episode
+    links=""
+    _attempt=0
+    while [ -z "$links" ] && [ "$_attempt" -lt 2 ]; do
+        _attempt=$((_attempt + 1))
+        links="$(hianime_curl "$_m3u8_master" -e "$refr" | sed 's|^#EXT-X-STREAM.*x||g; s|,.*|p|g; /^#/d; $!N; s|\n| >|;/EXT-X-I-FRAME/d' | sed "\|>https*://|!s|>|>${_m3u8_master%/*}/|" | sort -g -r -s)"
+    done
     [ -n "$links" ]
 }
 
@@ -372,9 +379,14 @@ select_quality() {
     case "$1" in
         best) _result=$(printf "%s" "$links" | head -n 1) ;;
         worst) _result=$(printf "%s" "$links" | grep -E '^[0-9]{3,4}' | tail -n 1) ;;
-        *) _result=$(printf "%s" "$links" | grep -m 1 "$1") ;;
+        *)
+            # tolerate a trailing 'p' (eg. "1080p") — the links only carry the bare resolution
+            _q="$1"
+            case "$_q" in *[pP]) _q="${_q%[pP]}" ;; esac
+            _result=$(printf "%s" "$links" | grep -m 1 "$_q")
+            ;;
     esac
-    [ -z "$_result" ] && printf "\33[2K\r\033[1;33m%s\033[0m\n" "$1 not found, defaulting to best" >&2 && _result=$(printf "%s" "$links" | head -n 1)
+    [ -z "$_result" ] && warn "$1 not found, defaulting to best" && _result=$(printf "%s" "$links" | head -n 1)
 
     episode=$(printf "%s" "$_result" | cut -d ">" -f 2)
 }
@@ -386,14 +398,18 @@ get_video_link() {
     select_quality "$quality"
     refr_flag="--referrer=$refr"
     # the shard CDN closes keepalive connections (ffmpeg logs "keepalive request
-    # failed" and reconnects), so use http_persistent=0 to open a fresh connection
-    # per segment (fast, curl-like) and --cache=yes so mpv greedily pre-buffers the
-    # whole episode instead of stuttering.
+    # failed" and reconnects) and bands its throttling, so:
+    #  - http_persistent=0 opens a fresh connection per segment (fast, curl-like)
+    #  - reconnect_streamed=1 makes lavf re-open the stream automatically when a
+    #    read dies instead of surfacing an error
+    #  - --network-timeout caps how long a dead connection can stall playback
+    #    before it gives up and (re)connects (mpv default is a full 60s freeze)
+    #  - --cache=yes makes mpv greedily pre-buffer the whole episode
     # the buffer window is symmetric ($ani_cache in both directions): mpv evicts
     # already-played packets from the back buffer once the window fills, so a
     # small --demuxer-max-bytes makes backward seeking fail.  keep both limits on
     # the same budget so you can seek forward AND back through the episode.
-    bacc_flag="--cache=yes --stream-lavf-o=http_persistent=0 --demuxer-readahead-secs=60 --demuxer-max-bytes=$ani_cache --demuxer-max-back-bytes=$ani_cache"
+    bacc_flag="--cache=yes --stream-lavf-o=http_persistent=0,reconnect=1,reconnect_streamed=1,reconnect_delay_max=5 --network-timeout=20 --demuxer-readahead-secs=60 --demuxer-max-bytes=$ani_cache --demuxer-max-back-bytes=$ani_cache"
     # once the episode is larger than the ram window, the back buffer still gets
     # evicted; spill the packet data to a temp file instead so the whole stream
     # stays seekable both ways regardless of length.
@@ -584,8 +600,11 @@ download() {
             case $1 in
                 *txt*)
                     warn "ffmpeg can't read this playlist directly; falling back to curl segment download"
-                    _tmp_ts="/tmp/ani-cli-$$.ts"
-                    _pl_file="/tmp/ani-cli-pl-$$.txt"
+                    # unique per-episode temp names: parallel batch downloads share $$, so a plain
+                    # "ani-cli-$$" scratch file would be clobbered by sibling jobs
+                    _uniq="$(printf "%s" "$2" | tr -cd '[:alnum:]_-')"
+                    _tmp_ts="/tmp/ani-cli-${_uniq}-$$.ts"
+                    _pl_file="/tmp/ani-cli-pl-${_uniq}-$$.txt"
                     curl -fsSL --compressed -A "$agent" -H "Referer: $_dl_refr" "$1" | tr -d '\r' > "$_pl_file" || die "download failed: couldn't fetch playlist"
                     _base="$(printf '%s' "$1" | sed 's|[^/]*$||')"
                     # the playlist is only unlinked inside die(), which exits the
@@ -784,9 +803,9 @@ play() {
             if [ "$batch_mode" = 1 ]; then
                 _count=$((_count + 1))
                 printf "\33[2K\r\033[1;34m[%s/%s] Downloading episode %s...\033[0m\n" "$_count" "$_total" "$ep_no"
-                # skip if already downloaded
+                # skip if already downloaded (only non-empty: a 0-byte file is a failed download)
                 _fname="Episode ${ep_no}.mp4"
-                if [ -f "$download_dir/$_fname" ]; then
+                if [ -s "$download_dir/$_fname" ]; then
                     printf "\33[2K\r\033[1;33mSkipping episode %s (already exists)\033[0m\n" "$ep_no"
                     continue
                 fi
@@ -817,7 +836,7 @@ parallel_batch_dl() {
     for i in $range; do
         ep_no=$i
         _fname="Episode ${ep_no}.mp4"
-        if [ -f "$download_dir/$_fname" ]; then
+        if [ -s "$download_dir/$_fname" ]; then
             printf "\33[2K\r\033[1;33mSkipping episode %s (already exists)\033[0m\n" "$ep_no"
             continue
         fi
@@ -851,6 +870,8 @@ quality="${ANI_CLI_QUALITY:-best}"
 bacc_flag=""
 refr_flag=""
 curl_exe=$(dep_ch_failover "curl_chrome136,curl_firefox135,curl_ff117,curl") || die "Program curl not found"
+# per-request timeout for the scraping calls (embed & playlist pages can be slow)
+http_timeout="${ANI_CLI_HTTP_TIMEOUT:-20}"
 cipher_flag=""
 case "$(uname -a | cut -d " " -f 1,3-)" in
     *Darwin*) cipher_flag="--ciphers $ciphers --tls13-ciphers $tls13_ciphers" ;; # mac OS
@@ -932,7 +953,7 @@ while [ $# -gt 0 ]; do
             ;;
         --parallel)
             [ $# -lt 2 ] && die "missing argument!"
-            case "$2" in ''|*[!0-9]*) die "parallel must be a number!" ;; *) parallel="$2" ;; esac
+            case "$2" in ''|*[!0-9]*) die "parallel must be a number!" ;; 0) die "parallel must be at least 1!" ;; *) parallel="$2" ;; esac
             shift
             ;;
         --cache-size)

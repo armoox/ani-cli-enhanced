@@ -1,0 +1,39 @@
+name: Scraper smoke test
+
+# Runs the real scraping chain (search -> episodes -> servers -> embed
+# deobfuscation -> m3u8 + quality) against the live site, so a provider
+# change (rotated obfuscation key, renamed server, blocked client) is
+# caught here instead of by users. Scheduled nightly; also runnable manually.
+on:
+  schedule:
+    - cron: '17 6 * * *'   # daily 06:17 UTC
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install fzf (menu backend)
+        run: sudo apt-get update && sudo apt-get install -y fzf
+
+      - name: Full scraping chain (search -> embed -> m3u8)
+        run: |
+          out="$(ANI_CLI_PLAYER=debug ANI_CLI_HIST_DIR="$RUNNER_TEMP/ani-hst" \
+            ./ani-cli -S 1 -e 1 -q best frieren 2>&1)"
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" | grep -q 'Selected link:' || { echo 'no Selected link output'; exit 1; }
+          link="$(printf '%s\n' "$out" | grep -A1 'Selected link:' | tail -n1)"
+          case "$link" in
+            *https://*.m3u8) ;;
+            *) echo "selected link is not an m3u8 url: $link"; exit 1 ;;
+          esac
+
+      - name: Episodes API for pinned series
+        run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+          eps="$(curl -fsSL -A "$UA" --max-time 15 "https://hianime.at/api/theme/episode/list/481")"
+          printf '%s' "$eps" | grep -q '"status":true' || { echo 'episodes API: unexpected response'; exit 1; }
+          printf '%s' "$eps" | grep -q 'data-id="[0-9][0-9]*"' || { echo 'episodes API: no episode rows'; exit 1; }
+          echo "episodes API OK (Frieren id 481)"

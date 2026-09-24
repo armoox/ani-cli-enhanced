@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://hianime.at/theme/images/logo.png" alt="hianime.at" width="200">
+  <img src=".assets/hianime-logo.png" alt="hianime.at" width="200">
   <p><strong>Watch anime from your terminal.</strong></p>
 
   <p>

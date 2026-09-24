@@ -1,6 +1,6 @@
 #!/bin/sh
 
-version_number="5.2.0"
+version_number="5.3.0"
 
 # UI
 
@@ -211,9 +211,11 @@ b64_decode() {
     printf "%s\n" "$1" | base64 -d 2>/dev/null || printf "%s\n" "$1" | base64 -D 2>/dev/null || printf "%s\n" "$1" | openssl base64 -d -A 2>/dev/null
 }
 
-# percent-encode whitespace and common url-unsafe characters
+# percent-encode whitespace and common url-unsafe characters.
+# '%' itself must be escaped *first*: it's the printf format char in the
+# search_api template, so a literal '%' in the query would otherwise corrupt it.
 urlencode() {
-    printf "%s" "$1" | tr ' ' '+' | sed -e 's|&|%26|g' -e 's|=|%3D|g' -e "s|'|%27|g" -e 's|"|%22|g' -e 's|#|%23|g' -e 's|?|%3F|g' -e 's|/|%2F|g' -e 's|\||%7C|g'
+    printf "%s" "$1" | tr ' ' '+' | sed -e 's|%|%25|g' -e 's|&|%26|g' -e 's|=|%3D|g' -e "s|'|%27|g" -e 's|"|%22|g' -e 's|#|%23|g' -e 's|?|%3F|g' -e 's|/|%2F|g' -e 's|\||%7C|g'
 }
 
 # the embed page ships its config as base64(json XOR "otaku-embed-v1"), this prints the json.
@@ -346,16 +348,18 @@ hianime_m3u8() {
     _servers="$(hianime_curl "$(printf "$servers_api" "$_ep_id")" | sed 's|\\"|"|g; s|server-item|\nserver-item|g')"
     # only the zokoanime embed is understood by deobfuscate_blob, the other servers use different players
     _hash="$(printf "%s\n" "$_servers" | sed -nE 's|.*data-type="'"$2"'".*data-server-name="ZokoAnime".*data-hash="([^"]*)".*|\1|p' | head -n 1)"
+    [ -z "$_hash" ] && { warn "No ZokoAnime server entry for episode ${1} (${2}); the site may have renamed the server or restructured the list"; return 1; }
     _embed="$(b64_decode "$_hash")"
-    [ -z "$_embed" ] && return 1
+    [ -z "$_embed" ] && { warn "Couldn't decode the ZokoAnime embed url for episode ${1} (${2})"; return 1; }
     # the stream host wants the embed site as referer, and the embed url carries the mal id for ani-skip
     refr="$(printf "%s" "$_embed" | sed -E 's|^(https?://[^/]*).*|\1/|')"
     mal_id="$(printf "%s" "$_embed" | sed -nE 's|.*/mal/([0-9]+)/.*|\1|p')"
     _blob="$(hianime_curl "$_embed" | sed -nE 's|.*window\.__P="([^"]*)".*|\1|p')"
-    [ -z "$_blob" ] && return 1
+    [ -z "$_blob" ] && { warn "The embed player page didn't expose a window.__P blob; the player may have changed or is blocking this client"; return 1; }
     _json="$(deobfuscate_blob "$_blob")"
+    printf "%s" "$_json" | grep -q '^{' || { warn "Embed config couldn't be decrypted; the site likely rotated its obfuscation key (see deobfuscate_blob)"; return 1; }
     _m3u8_master="$(printf "%s" "$_json" | sed -nE 's|.*"src":"([^"]*\.m3u8[^"]*)".*|\1|p')"
-    [ -z "$_m3u8_master" ] && return 1
+    [ -z "$_m3u8_master" ] && { warn "No m3u8 master url in the embed config for episode ${1} (${2})"; return 1; }
     # several languages can be listed, the site marks the english track as default
     sub_link="$(printf "%s" "$_json" | sed 's|.*"subtitles":\[||; s|\].*||; s|},{|}\n{|g' | grep -m 1 '"default":true' | sed -nE 's|.*"src":"([^"]*)".*|\1|p')"
     # quality variants are relative to the master playlist
@@ -584,6 +588,9 @@ download() {
                     _pl_file="/tmp/ani-cli-pl-$$.txt"
                     curl -fsSL --compressed -A "$agent" -H "Referer: $_dl_refr" "$1" | tr -d '\r' > "$_pl_file" || die "download failed: couldn't fetch playlist"
                     _base="$(printf '%s' "$1" | sed 's|[^/]*$||')"
+                    # the playlist is only unlinked inside die(), which exits the
+                    # script before the `done < "$_pl_file"` redirection reopens it
+                    # shellcheck disable=SC2094
                     while IFS= read -r _seg; do
                         case $_seg in '#'*|'') continue ;;
                         esac

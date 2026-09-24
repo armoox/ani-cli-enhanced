@@ -26,7 +26,7 @@ Continue watching anime from history.
 Resume playback from the last saved position (mpv only).
 .TP
 \fB\-d | --download\fR
-Download episode.
+Download episode. Subtitles are fetched along with the video and muxed into the MP4 (mov_text) when ffmpeg is available, so the file plays with subtitles on any player; the \fB.srt\fR sidecar is kept instead when embedding isn't possible or \fBANI_CLI_EMBED_SUBS=0\fR.
 .TP
 \fB\-D | --delete\fR
 Delete history.
@@ -110,6 +110,9 @@ mpv buffer window kept for seeking, applied symmetrically so you can seek both f
 .TP
 \fBANI_CLI_DISK_CACHE\fR
 Controls whether the mpv stream cache is spilled to a temporary file so long episodes stay seekable backward. Can be 0 (RAM only) or 1 (on disk). Default is 1, equivalent to \fB\--disk-cache\fR.
+.TP
+\fBANI_CLI_EMBED_SUBS\fR
+Controls whether downloaded subtitles are embedded into the MP4 as mov_text so the file plays with subtitles on any player (TVs and phones often ignore sidecar files). The sidecar is kept when embedding isn't possible (no ffmpeg or the media already carries a subtitle track). Can be 0 (keep the \fB.srt\fR/\fB.vtt\fR sidecar only) or 1 (embed; default).
 .TP
 \fBANI_CLI_AUTO_PLAY\fR
 Controls if episodes play one after another automatically (mpv only). Equivalent to --auto-play. Can be 0 (disabled) or 1 (enabled). Default is 0.

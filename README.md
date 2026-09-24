@@ -23,7 +23,7 @@ A fork of [pystardust/ani-cli](https://github.com/pystardust/ani-cli) — built 
 
 - **Buffer that stays seekable** — mpv gets a symmetric RAM window (`--cache-size`, default 1GiB) *plus* a disk-spilled cache (`--cache-on-disk`, default on), so you can scrub forward **and** backward through the whole episode or movie without re-buffering; dropped shard-CDN connections auto-reconnect (lavf) and a network timeout caps how long a dead connection can stall rather than freezing playback
 - **Rich search** — results show type & duration, the id slug is hidden, and menus can page through every result (`-P/--page` or the "load more" entry)
-- **Download manager** — per-anime folders (`$DOWNLOAD_DIR/One Piece/Episode 1.mp4`), `--batch` for whole series, and concurrent downloads (`--parallel N` / `ANI_CLI_PARALLEL`)
+- **Download manager** — per-anime folders (`$DOWNLOAD_DIR/One Piece/Episode 1.mp4`), `--batch` for whole series, concurrent downloads (`--parallel N` / `ANI_CLI_PARALLEL`), and subtitles muxed into each episode (`mov_text`) so the file plays with subs on any player — or kept as a `.srt` sidecar with `ANI_CLI_EMBED_SUBS=0`
 - **Skip intro & outro** — bundled MyAnimeList-based integration that needs no `ani-skip` binary (`--skip` / `ANI_CLI_SKIP_INTRO`)
 - **Auto-play & resume** — rolls into the next episode automatically (`--auto-play`) and picks up exactly where you left off (`-c --resume`)
 - **Full playback control** — quality picker (`-q`), dubs, episode/count ranges (`-e 5-6`), in-terminal playback (`--no-detach`), VLC or Syncplay

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-version_number="5.4.0"
+version_number="5.5.0"
 
 # UI
 
@@ -579,21 +579,133 @@ prepare_download_dir() {
     [ -n "$_dir" ] && mkdir -p "$download_dir" 2>/dev/null
 }
 
+# convert a webvtt file to srt; host vtts omit the hours field (eg. 00:20.240)
+# which srt readers mis-parse - ffmpeg pads it to HH:MM:SS,mmm.  needs ffmpeg.
+vtt2srt() {
+    command -v ffmpeg >/dev/null 2>&1 || return 1
+    ffmpeg -loglevel error -y -i "$1" "$2"
+}
+
+# 0 if the video file already carries a subtitle track
+has_embedded_subs() {
+    command -v ffprobe >/dev/null 2>&1 || return 1
+    ffprobe -v error -select_streams s -show_entries stream=codec_type -of csv=p=0 "$1" 2>/dev/null | grep -q subtitle
+}
+
+# finish a downloaded video: embed a sidecar subtitle as mov_text for
+# single-file playback where the player can't read sidecars (TVs, phones).
+# keeps the sidecar when embedding isn't possible; never destroys the video.
+# returns 0 either way, so callers treat it as non-fatal.
+embed_subtitles() {
+    _video="$1"
+    _sidecar="$2"
+    [ -f "$_sidecar" ] || return 0
+    command -v ffmpeg >/dev/null 2>&1 || return 0
+    [ "${embed_subs:-1}" = 1 ] || return 0
+    # already embedded: drop the redundant sidecar
+    if has_embedded_subs "$_video"; then
+        rm -f "$_sidecar"
+        return 0
+    fi
+    # sibling jobs share $$, so make the merged scratch name unique
+    _mux_uniq="$(basename "$_video" .mp4 | tr -cd '[:alnum:]_-')"
+    _merged="/tmp/ani-cli-mux-${_mux_uniq}-$$.mp4"
+    if ffmpeg -loglevel error -y -i "$_video" -i "$_sidecar" -map 0 -map 1:0 -c copy -c:s mov_text "$_merged" && mv "$_merged" "$_video"; then
+        rm -f "$_sidecar"
+        return 0
+    fi
+    rm -f "$_merged"
+    return 0
+}
+
+# warn when a finished video is much shorter than the source playlist promised
+# (a sign the shard rate-limited mid-download and truncated the result).
+# returns 1 on a truncated file so callers can prune it and fail cleanly
+verify_video_length() {
+    _file="$1"
+    _src_secs="${2:-0}"
+    [ "${_src_secs:-0}" -gt 0 ] || return 0
+    command -v ffprobe >/dev/null 2>&1 || return 0
+    _dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$_file" 2>/dev/null | cut -d. -f1)
+    [ -n "${_dur:-}" ] && [ "${_dur:-0}" -lt "$((_src_secs / 2))" ] &&
+        warn "Downloaded file is much shorter than the source ($_dur s vs ~$_src_secs s) - the shard likely rate-limited it; try again." &&
+        return 1
+    return 0
+}
+
 # shellcheck disable=SC2086
 download() {
     _dl_refr="${refr_flag#--referrer=}"
-    [ -n "$sub_link" ] && $curl_exe -sL -A "$agent" -e "$_dl_refr" --max-time 10 $cipher_flag "$sub_link" -o "$download_dir/$2.vtt"
+    _uniq="$(printf "%s" "$2" | tr -cd '[:alnum:]_-')"
+    _final="$download_dir/$2.mp4"
+    # download into a hidden temp file, then rename on success: an interrupted
+    # download leaves no partial file under the final name, so retrying or
+    # re-downloading never trips an interactive "already exists. Overwrite?"
+    # prompt (stdin isn't a tty inside ani-cli, so non-interactive runs fail)
+    _tmpout="$download_dir/.${_uniq}-$$.part.mp4"
+    # fetch subtitles up front.  keep the raw webvtt sidecar, converting to srt
+    # when ffmpeg is around (host vtts omit the hours field).  a subtitle fetch
+    # failure is not fatal for the video download.
+    _sub_file=""
+    if [ -n "$sub_link" ]; then
+        _vtt_tmp="/tmp/ani-cli-sub-${_uniq}-$$.vtt"
+        _sub_side="$download_dir/$2.srt"
+        if $curl_exe -fsSL -A "$agent" -e "$_dl_refr" --max-time 10 $cipher_flag "$sub_link" -o "$_vtt_tmp"; then
+            if [ -s "$_vtt_tmp" ] && vtt2srt "$_vtt_tmp" "$_sub_side"; then
+                rm -f "$_vtt_tmp"
+                _sub_file="$_sub_side"
+            elif [ -s "$_vtt_tmp" ]; then
+                # no ffmpeg (or conversion failed): keep the raw webvtt sidecar
+                rm -f "$_sub_side"
+                mv "$_vtt_tmp" "$download_dir/$2.vtt"
+                _sub_file="$download_dir/$2.vtt"
+            else
+                rm -f "$_vtt_tmp"
+                warn "Subtitle file for $2 came back empty"
+            fi
+        else
+            rm -f "$_vtt_tmp"
+            warn "Couldn't download subtitles for $2"
+        fi
+    fi
+    # sum of the source playlist's #EXTINF durations, for the length check
+    _src_secs=""
+    case $1 in
+        *m3u8*|*txt*)
+            _src_secs="$($curl_exe -sL -A "$agent" -e "$_dl_refr" --max-time "$http_timeout" $cipher_flag "$1" 2>/dev/null |
+                grep '#EXTINF' | sed 's/[^0-9.]//g' | awk '{s+=$1} END {printf "%.0f", s}')"
+            case "$_src_secs" in ''|*[!0-9]*) _src_secs=0 ;; esac
+            ;;
+    esac
     case $1 in
         *m3u8*|*txt*)
             if command -v "yt-dlp" >/dev/null; then
-                yt-dlp --referer "$_dl_refr" "$1" --no-skip-unavailable-fragments --fragment-retries infinite -N 4 -o "$download_dir/$2.mp4" && return 0
+                if yt-dlp --referer "$_dl_refr" "$1" --no-skip-unavailable-fragments --fragment-retries infinite -N 4 -o "$_tmpout"; then
+                    mv "$_tmpout" "$_final"
+                    if verify_video_length "$_final" "$_src_secs"; then
+                        embed_subtitles "$_final" "$_sub_file"
+                        return 0
+                    fi
+                    rm -f "$_final"
+                    return 1
+                fi
                 warn "yt-dlp failed, trying ffmpeg"
+                rm -f "$_tmpout" "$_tmpout.part"
             fi
             # -extension_picky needs ffmpeg >= 7.1: retry without it on older builds
-            if ffmpeg -extension_picky 0 -referer "$_dl_refr" -loglevel error -stats -i "$1" -c copy "$download_dir/$2.mp4" \
-                || ffmpeg -referer "$_dl_refr" -loglevel error -stats -i "$1" -c copy "$download_dir/$2.mp4"; then
-                return 0
+            # reconnect flags mirror the mpv playback settings: the shard resets
+            # mid-stream, so let the download reopen the connection instead of dying
+            if ffmpeg -y -extension_picky 0 -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -rw_timeout 20000000 -referer "$_dl_refr" -loglevel error -stats -i "$1" -c copy "$_tmpout" \
+                || ffmpeg -y -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -rw_timeout 20000000 -referer "$_dl_refr" -loglevel error -stats -i "$1" -c copy "$_tmpout"; then
+                mv "$_tmpout" "$_final"
+                if verify_video_length "$_final" "$_src_secs"; then
+                    embed_subtitles "$_final" "$_sub_file"
+                    return 0
+                fi
+                rm -f "$_final"
+                return 1
             fi
+            rm -f "$_tmpout" "$_tmpout.part"
             # some embed variants name the mpeg-ts segments "*.woff2", which the
             # system ffmpeg's hls demuxer rejects outright; concatenate them with
             # curl (fresh connection per segment, referer set) and remux locally
@@ -602,10 +714,13 @@ download() {
                     warn "ffmpeg can't read this playlist directly; falling back to curl segment download"
                     # unique per-episode temp names: parallel batch downloads share $$, so a plain
                     # "ani-cli-$$" scratch file would be clobbered by sibling jobs
-                    _uniq="$(printf "%s" "$2" | tr -cd '[:alnum:]_-')"
                     _tmp_ts="/tmp/ani-cli-${_uniq}-$$.ts"
                     _pl_file="/tmp/ani-cli-pl-${_uniq}-$$.txt"
-                    curl -fsSL --compressed -A "$agent" -H "Referer: $_dl_refr" "$1" | tr -d '\r' > "$_pl_file" || die "download failed: couldn't fetch playlist"
+                    curl -fsSL --compressed -A "$agent" -H "Referer: $_dl_refr" "$1" | tr -d '\r' > "$_pl_file" || {
+                        rm -f "$_pl_file"
+                        warn "Couldn't fetch the playlist for $2"
+                        return 1
+                    }
                     _base="$(printf '%s' "$1" | sed 's|[^/]*$||')"
                     # the playlist is only unlinked inside die(), which exits the
                     # script before the `done < "$_pl_file"` redirection reopens it
@@ -631,26 +746,38 @@ download() {
                             cat "$_tmp_ts.part" >> "$_tmp_ts"
                             _ok=1
                         done
-                        [ "$_ok" = 0 ] && { rm -f "$_tmp_ts" "$_tmp_ts.part" "$_pl_file"; die "download failed on segment $_seg (shard throttled?)"; }
+                        [ "$_ok" = 0 ] && {
+                            rm -f "$_tmp_ts" "$_tmp_ts.part" "$_pl_file"
+                            warn "Download of $2 failed on segment $_seg (shard throttled?)"
+                            return 1
+                        }
                     done < "$_pl_file"
                     rm -f "$_tmp_ts.part"
-                    _sum=$(grep '#EXTINF' "$_pl_file" | sed 's/[^0-9.]//g' | awk '{s+=$1} END {print s + 0}')
                     rm -f "$_pl_file"
-                    ffmpeg -loglevel error -y -i "$_tmp_ts" -c copy "$download_dir/$2.mp4"
+                    ffmpeg -loglevel error -y -i "$_tmp_ts" -c copy "$_tmpout"
                     _rc=$?
                     rm -f "$_tmp_ts"
-                    [ "$_rc" != 0 ] && die "download failed"
-                    if command -v ffprobe >/dev/null 2>&1 && [ -n "${_sum:-}" ] && [ "${_sum:-0}" -gt 0 ]; then
-                        _dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$download_dir/$2.mp4" 2>/dev/null | cut -d. -f1)
-                        [ -n "${_dur:-}" ] && [ "${_dur:-0}" -lt "$((_sum / 2))" ] && warn "File is much shorter than the source ($_dur s vs ~$_sum s) - the shard likely rate-limited the download; try again."
+                    [ "$_rc" != 0 ] && { rm -f "$_tmpout"; return 1; }
+                    mv "$_tmpout" "$_final"
+                    if verify_video_length "$_final" "$_src_secs"; then
+                        embed_subtitles "$_final" "$_sub_file"
+                        return 0
                     fi
-                    return 0
+                    rm -f "$_final"
+                    return 1
                     ;;
             esac
+            return 1
             ;;
         *)
             # shellcheck disable=SC2086
-            aria2c --referer="$_dl_refr" --enable-rpc=false --check-certificate=false --continue $iSH_DownFix --summary-interval=0 -x 16 -s 16 "$1" --dir="$download_dir" -o "$2.mp4" --download-result=hide
+            if aria2c --referer="$_dl_refr" --enable-rpc=false --check-certificate=false --continue $iSH_DownFix --summary-interval=0 -x 16 -s 16 "$1" --dir="$download_dir" -o ".${_uniq}-$$.part.mp4" --download-result=hide; then
+                mv "$_tmpout" "$_final"
+                embed_subtitles "$_final" "$_sub_file"
+                return 0
+            fi
+            rm -f "$_tmpout"
+            return 1
             ;;
     esac
 }
@@ -737,7 +864,15 @@ play_episode() {
             ;;
         vlc*) nohup $player_function --http-referrer="${refr_flag#--referrer=}" --play-and-exit --meta-title="${anime_title} Episode ${ep_no}" "$episode" ${sub_link:+:input-slave="$sub_link"} $player_extra_flags >/dev/null 2>&1 & ;;
         *yncpla*) nohup $player_function "$episode" $player_extra_flags -- ${sub_link:+--sub-file="$sub_link"} --tls-verify=no --force-media-title="${anime_title} Episode ${ep_no}" $refr_flag >/dev/null 2>&1 & ;;
-        download) "$player_function" "$episode" "Episode ${ep_no}" $player_extra_flags ;;
+        download)
+            if ! "$player_function" "$episode" "Episode ${ep_no}" $player_extra_flags; then
+                if [ "$batch_mode" = 1 ]; then
+                    printf "\33[2K\r\033[1;33mFailed to download episode %s; continuing.\033[0m\n" "$ep_no"
+                else
+                    die "Failed to download Episode ${ep_no}"
+                fi
+            fi
+            ;;
         catt) nohup catt cast "$episode" $player_extra_flags >/dev/null 2>&1 & ;;
         iSH)
             printf "\e]8;;vlc://%s\a~~~~~~~~~~~~~~~~~~~~\n~ Tap to open VLC ~\n~~~~~~~~~~~~~~~~~~~~\e]8;;\a\n" "$episode"
@@ -892,6 +1027,7 @@ auto_play="${ANI_CLI_AUTO_PLAY:-0}"
 parallel="${ANI_CLI_PARALLEL:-1}"
 ani_cache="${ANI_CLI_CACHE:-1GiB}"
 disk_cache="${ANI_CLI_DISK_CACHE:-1}"
+embed_subs="${ANI_CLI_EMBED_SUBS:-1}"
 page=1
 menu_program="${ANI_CLI_MENU:-fzf}"
 menu_extra_flags="${ANI_CLI_MENU_FLAGS:-}"

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > The version number also drives the built-in `-U` updater: users on an older
 > release are offered the update as soon as the new version lands on `master`.
 
+## [5.5.0] - 2026-09-25
+
+### Added
+- Subtitles are now part of the download: the sidecar renamed/converted from raw
+  WebVTT to `.srt` (host VTTs omit the hours field, which SRT readers mis-parse;
+  ffmpeg pads it), and then embedded into the MP4 itself (`mov_text`) whenever
+  ffmpeg is available - a single self-contained file that plays with subtitles
+  on TVs and phones that ignore sidecars. `ANI_CLI_EMBED_SUBS` (default on)
+  restores sidecar-only behavior
+- Every download path (yt-dlp, ffmpeg, curl-segment fallback) now warns when the
+  finished file is far shorter than the source playlist promised, and treats it
+  as a failed download instead of shipping a truncated episode
+
+### Changed
+- Downloads go to a hidden temp file and are renamed into place only on success:
+  an interrupted download never leaves a partial file, so retrying no longer
+  trips ffmpeg/yt-dlp's interactive "already exists. Overwrite?" prompt (stdin
+  isn't a tty inside ani-cli, so that would silently fail before); re-downloading
+  an episode atomically replaces the old file
+- ffmpeg downloads now carry the same lavf auto-reconnect options as live
+  playback (`-reconnect`, `-rw_timeout 20s`), so a mid-download shard reset
+  reopens the connection instead of truncating the file
+- Download failures are now reported properly: a failed episode aborts a single
+  download and is skipped (with a warning) in `--batch` mode instead of exiting 0
+  as if nothing had happened
+- Subtitle fetch failures are reported instead of silently producing a
+  subtitle-less video
+
 ## [5.4.0] - 2026-09-25
 
 ### Changed

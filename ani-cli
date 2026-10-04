@@ -1,6 +1,6 @@
 #!/bin/sh
 
-version_number="5.5.0"
+version_number="5.5.1"
 
 # UI
 
@@ -285,6 +285,26 @@ hianime_has_next() {
     [ -n "$_next" ] && [ "$_next" -gt "$_cur" ]
 }
 
+# the single definition of how a search result row (id \t title \t type \t duration)
+# is rendered as a menu label.  search_pick needs this rule twice - once to show
+# the menu and once to map the picked label back to its row - and a divergence
+# between the two silently picks the wrong anime, so it lives in one place.
+#   want=<label>  keep only the row rendering to that label (mapping back)
+#   raw=1         print the untouched tab-separated row instead of the label
+# the single quotes are deliberate: $2/$3/$4/$0 are awk fields, not shell vars
+# shellcheck disable=SC2016
+search_label_awk='{
+    line = $2
+    if ($3 != "" || $4 != "") {
+        line = line " ["
+        if ($3 != "") line = line $3
+        if ($4 != "") { if ($3 != "") line = line " | "; line = line $4 }
+        line = line "]"
+    }
+    if (want != "" && line != want) next
+    print (raw ? $0 : line)
+}'
+
 # pick an anime from enhanced search results (id \t title \t type \t duration).
 # the id is hidden from the menu so the ranking looks clean; the picked
 # display line is mapped back to its row.  appends a "load more" entry to
@@ -296,16 +316,7 @@ search_pick() {
     [ "$_count" -eq 1 ] && printf "%s" "$_input" && return 0
     _multi=""
     [ $# -ge 2 ] && _multi="$2"
-    _display="$(printf "%s\n" "$_input" | awk -F'\t' '{
-        line = $2
-        if ($3 != "" || $4 != "") {
-            line = line " ["
-            if ($3 != "") line = line $3
-            if ($4 != "") { if ($3 != "") line = line " | "; line = line $4 }
-            line = line "]"
-        }
-        print line
-    }')"
+    _display="$(printf "%s\n" "$_input" | awk -F'\t' "$search_label_awk")"
     [ -n "$1" ] && _display="$(printf "%s\n%s" "$_display" "load_more_page  ▶ Load more results")"
     _picked="$(printf "%s\n" "$_display" | menu "Select anime: " "$_multi" "$menu_extra_flags")"
     [ -n "$_picked" ] || return 1
@@ -315,17 +326,7 @@ search_pick() {
             *)
                 # map the picked display line back to the full result row
                 _sought="$(printf "%s" "$_line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-                printf "%s\n" "$_input" | awk -F'\t' -v want="$_sought" '
-                    {
-                        line = $2
-                        if ($3 != "" || $4 != "") {
-                            line = line " ["
-                            if ($3 != "") line = line $3
-                            if ($4 != "") { if ($3 != "") line = line " | "; line = line $4 }
-                            line = line "]"
-                        }
-                        if (line == want) print
-                    }'
+                printf "%s\n" "$_input" | awk -F'\t' -v want="$_sought" -v raw=1 "$search_label_awk"
                 ;;
         esac
     done <<EOF
@@ -716,7 +717,7 @@ download() {
                     # "ani-cli-$$" scratch file would be clobbered by sibling jobs
                     _tmp_ts="/tmp/ani-cli-${_uniq}-$$.ts"
                     _pl_file="/tmp/ani-cli-pl-${_uniq}-$$.txt"
-                    curl -fsSL --compressed -A "$agent" -H "Referer: $_dl_refr" "$1" | tr -d '\r' > "$_pl_file" || {
+                    $curl_exe -fsSL --compressed -A "$agent" -H "Referer: $_dl_refr" "$1" | tr -d '\r' > "$_pl_file" || {
                         rm -f "$_pl_file"
                         warn "Couldn't fetch the playlist for $2"
                         return 1
@@ -732,7 +733,7 @@ download() {
                         _try=0
                         while [ "$_ok" = 0 ] && [ "$_try" -lt 5 ]; do
                             _try=$((_try + 1))
-                            if ! curl -fsSL --compressed -A "$agent" -H "Referer: $_dl_refr" "${_base}${_seg}" -o "$_tmp_ts.part"; then
+                            if ! $curl_exe -fsSL --compressed -A "$agent" -H "Referer: $_dl_refr" "${_base}${_seg}" -o "$_tmp_ts.part"; then
                                 sleep 2
                                 continue
                             fi

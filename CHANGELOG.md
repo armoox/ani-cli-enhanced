@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > The version number also drives the built-in `-U` updater: users on an older
 > release are offered the update as soon as the new version lands on `master`.
 
+## [5.5.1] - 2026-10-04
+
+### Fixed
+- The curl-segment download fallback now goes through the same curl binary the
+  rest of the script selects (`$curl_exe`) instead of hardcoding `curl`. On a
+  system where plain curl is the thing being routed around, that fallback was
+  the one download path still calling it directly
+
+### Changed
+- The search menu's label format is defined once (`search_label_awk`) rather than
+  duplicated in the two places that need it: rendering the menu and mapping the
+  picked label back to its result row. The two copies had to stay byte-identical
+  or a search would silently resolve to the wrong anime
+
 ## [5.5.0] - 2026-09-25
 
 ### Added
